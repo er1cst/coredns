@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -18,11 +19,7 @@ import (
 
 func init() { plugin.Register("forward", setup) }
 
-func setup(c *caddy.Controller) error {
-	f, err := parseForward(c)
-	if err != nil {
-		return plugin.Error("forward", err)
-	}
+func setupForward(c *caddy.Controller, f *Forward) error {
 	if f.Len() > max {
 		return plugin.Error("forward", fmt.Errorf("more than %d TOs configured: %d", max, f.Len()))
 	}
@@ -47,6 +44,20 @@ func setup(c *caddy.Controller) error {
 	c.OnShutdown(func() error {
 		return f.OnShutdown()
 	})
+	return nil
+}
+
+func setup(c *caddy.Controller) error {
+	fs, err := parseForward(c)
+	if err != nil {
+		return plugin.Error("forward", err)
+	}
+
+	for _, f := range fs {
+		if err := setupForward(c, f); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -67,37 +78,40 @@ func (f *Forward) OnShutdown() error {
 	return nil
 }
 
-func parseForward(c *caddy.Controller) (*Forward, error) {
+func parseForward(c *caddy.Controller) ([]*Forward, error) {
 	var (
-		f   *Forward
-		err error
-		i   int
+		fs []*Forward = make([]*Forward, 0)
 	)
 	for c.Next() {
-		if i > 0 {
-			return nil, plugin.ErrOnce
-		}
-		i++
-		f, err = parseStanza(c)
+		f, err := parseStanza(c)
 		if err != nil {
 			return nil, err
 		}
+		fs = append(fs, f)
 	}
-	return f, nil
+	return fs, nil
 }
 
 func parseStanza(c *caddy.Controller) (*Forward, error) {
 	f := New()
 
-	if !c.Args(&f.from) {
+	var name string
+	if !c.Args(&name) {
 		return f, c.ArgErr()
 	}
-	origFrom := f.from
-	zones := plugin.Host(f.from).NormalizeExact()
-	f.from = zones[0] // there can only be one here, won't work with non-octet reverse
 
-	if len(zones) > 1 {
-		log.Warningf("Unsupported CIDR notation: '%s' expands to multiple zones. Using only '%s'.", origFrom, f.from)
+	if strings.HasPrefix(name, "file:") {
+		matcher, err := NewMatcherFromFile(strings.TrimPrefix(name, "file:"))
+		if err != nil {
+			return nil, err
+		}
+		f.matcher = matcher
+	} else {
+		matcher, err := NewSingleNameMatcher(name)
+		if err != nil {
+			return nil, err
+		}
+		f.matcher = matcher
 	}
 
 	to := c.RemainingArgs()

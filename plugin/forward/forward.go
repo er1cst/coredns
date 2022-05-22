@@ -34,7 +34,7 @@ type Forward struct {
 	p          Policy
 	hcInterval time.Duration
 
-	from    string
+	matcher Matcher
 	ignored []string
 
 	tlsConfig     *tls.Config
@@ -56,7 +56,7 @@ type Forward struct {
 
 // New returns a new Forward.
 func New() *Forward {
-	f := &Forward{maxfails: 2, tlsConfig: new(tls.Config), expire: defaultExpire, p: new(random), from: ".", hcInterval: hcInterval, opts: options{forceTCP: false, preferUDP: false, hcRecursionDesired: true}}
+	f := &Forward{maxfails: 2, tlsConfig: new(tls.Config), expire: defaultExpire, p: new(random), hcInterval: hcInterval, opts: options{forceTCP: false, preferUDP: false, hcRecursionDesired: true}}
 	return f
 }
 
@@ -191,18 +191,13 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 }
 
 func (f *Forward) match(state request.Request) bool {
-	if !plugin.Name(f.from).Matches(state.Name()) || !f.isAllowedDomain(state.Name()) {
+	if !f.isAllowedDomain(state.Name()) {
 		return false
 	}
-
-	return true
+	return f.matcher.Match(state.Name())
 }
 
 func (f *Forward) isAllowedDomain(name string) bool {
-	if dns.Name(name) == dns.Name(f.from) {
-		return true
-	}
-
 	for _, ignore := range f.ignored {
 		if plugin.Name(ignore).Matches(name) {
 			return false
